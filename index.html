@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Facial Intelligence</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link
+    href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,600;1,300;1,400&family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500&display=swap"
+    rel="stylesheet">
+
+  <!--
+  MediaPipe Tasks Vision — Google AI Edge SDK
+  Imports 4 vision tasks from a single ES module bundle (WASM shared):
+    • FaceDetector    — BlazeFace short-range, fast guard (~2 ms/frame)
+    • FaceLandmarker  — 478 landmarks + 52 blendshapes
+    • ImageClassifier — EfficientNet Lite0, scene/subject labels
+    • ImageEmbedder   — MobileNet V3 Small, semantic embeddings
+  All hoisted onto window so the non-module main script can access them.
+-->
+  <script type="module" src="/frontend/js/imports.js"></script>
+  <link rel="stylesheet" href="/frontend/css/styles.css">
+</head>
+
+<body>
+
+  <div class="app">
+    <!-- ═══════ HEADER ═══════ -->
+    <header>
+      <div class="logo">Lu<em>mina</em></div>
+      <div class="header-right">
+        <div class="tagline">Facial Intelligence · Real-Time</div>
+        <div class="model-badge">MediaPipe Tasks Vision · 4 Models</div>
+      </div>
+    </header>
+
+    <!-- ═══════ MAIN ═══════ -->
+    <div class="main">
+
+      <!-- LEFT: Canvas + controls -->
+      <div class="canvas-area">
+        <div class="toolbar">
+          <div class="mode-tabs">
+            <button class="mode-tab active" id="tab-upload" onclick="switchMode('upload')">Upload</button>
+            <button class="mode-tab" id="tab-webcam" onclick="switchMode('webcam')">Live Cam</button>
+          </div>
+          <div class="cam-controls" id="cam-controls">
+            <button class="btn-sm" onclick="captureFrame()">Capture</button>
+            <button class="btn-sm danger" onclick="stopCam()">Stop Cam</button>
+          </div>
+        </div>
+
+        <div class="canvas-wrap" id="canvas-wrap">
+          <!-- Upload drop zone -->
+          <div class="drop-zone" id="drop-zone" onclick="document.getElementById('file-input').click()">
+            <div class="drop-icon">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"
+                stroke-linecap="round">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                <polyline points="17,8 12,3 7,8" />
+                <line x1="12" y1="3" x2="12" y2="15" />
+              </svg>
+            </div>
+            <div class="drop-title">Upload Portrait</div>
+            <div class="drop-sub">JPEG · PNG · WEBP — Click or Drag</div>
+          </div>
+
+          <video id="video" autoplay muted playsinline></video>
+          <canvas id="output-canvas"></canvas>
+          <input type="file" id="file-input" accept="image/*" style="display:none" onchange="handleFile(event)">
+        </div>
+
+        <div class="status-bar">
+          <div class="dot" id="status-dot"></div>
+          <span class="status-text" id="status-text">Loading FaceMesh model…</span>
+        </div>
+      </div>
+
+      <!-- RIGHT: Feature sidebar -->
+      <div class="sidebar">
+        <div class="sidebar-inner">
+          <!-- Face Detection (BlazeFace) -->
+          <div class="f-card" id="card-detect">
+            <div class="f-label">Face Detection</div>
+            <div class="f-value" id="val-detect">—</div>
+            <div class="det-row">
+              <div class="det-arc-wrap">
+                <svg viewBox="0 0 48 48" fill="none">
+                  <!-- background track -->
+                  <circle cx="24" cy="24" r="18" stroke="rgba(255,255,255,0.06)" stroke-width="4" />
+                  <!-- confidence arc — stroke-dasharray animated via JS -->
+                  <circle id="det-arc" cx="24" cy="24" r="18" stroke="rgba(196,154,108,0.7)" stroke-width="4"
+                    stroke-linecap="round" stroke-dasharray="0 113" transform="rotate(-90 24 24)"
+                    style="transition: stroke-dasharray 0.5s ease" />
+                </svg>
+                <div class="det-arc-label" id="det-arc-pct">—</div>
+              </div>
+              <div class="det-meta">
+                <div class="det-meta-row">
+                  <span class="det-meta-key">Model</span>
+                  <span class="det-meta-val">BlazeFace SR</span>
+                </div>
+                <div class="det-meta-row">
+                  <span class="det-meta-key">Box W</span>
+                  <span class="det-meta-val" id="det-box-w">—</span>
+                </div>
+                <div class="det-meta-row">
+                  <span class="det-meta-key">Box H</span>
+                  <span class="det-meta-val" id="det-box-h">—</span>
+                </div>
+                <div class="det-meta-row">
+                  <span class="det-meta-key">Faces</span>
+                  <span class="det-meta-val" id="det-count">—</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Blendshape Expressions (from FaceLandmarker) -->
+          <div class="f-card" id="card-blend">
+            <div class="f-label">Facial Expressions</div>
+            <div class="f-value" id="val-blend">—</div>
+            <div class="f-sub">52 blendshape coefficients · FaceLandmarker</div>
+            <div class="blend-list" id="blend-list"></div>
+          </div>
+
+          <!-- Skin Tone -->
+          <div class="f-card" id="card-skin">
+            <div class="f-label">Skin Tone</div>
+            <div class="f-value" id="val-skin">—</div>
+            <div class="f-sub" id="sub-skin">Fitzpatrick Scale · Undertone</div>
+            <div class="swatch" id="swatch-skin" style="background:#111;"></div>
+            <div class="conf-row">
+              <span class="conf-label">ITA Score</span>
+              <div class="conf-bg">
+                <div class="conf-fill" id="conf-skin"></div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Color Temperature -->
+          <div class="f-card" id="card-temp">
+            <div class="f-label">Scene Temperature</div>
+            <div class="f-value" id="val-temp">—</div>
+            <div class="f-sub" id="sub-temp">Estimated Kelvin</div>
+            <div class="temp-bar">
+              <div class="temp-pin" id="temp-pin"></div>
+            </div>
+          </div>
+
+          <!-- Face Shape -->
+          <div class="f-card" id="card-face">
+            <div class="f-label">Face Shape</div>
+            <div class="f-value" id="val-face">—</div>
+            <div class="f-sub" id="sub-face">Geometric landmark analysis</div>
+            <div class="measure-grid" id="measure-grid" style="display:none;"></div>
+          </div>
+
+          <!-- Ornaments -->
+          <div class="f-card" id="card-orn">
+            <div class="f-label">Detected Ornaments</div>
+            <div class="f-value" id="val-orn">—</div>
+            <div class="tag-list" id="tag-list"></div>
+          </div>
+
+          <!-- Scene Classifier (EfficientNet, on-demand) -->
+          <div class="f-card" id="card-cls" style="display:none;">
+            <div class="f-label">Scene Classification</div>
+            <div class="f-value" id="val-cls">—</div>
+            <div class="f-sub">EfficientNet Lite0 · ImageNet labels</div>
+            <div class="cls-list" id="cls-list"></div>
+          </div>
+
+          <!-- Distance from Camera -->
+          <div class="f-card" id="card-dist">
+            <div class="f-label">Camera Distance</div>
+            <div class="f-value" id="val-dist">—</div>
+            <div class="f-sub" id="sub-dist">IPD-based proximity · set range in settings</div>
+            <div class="dist-track">
+              <div class="dist-zone" id="dist-zone"></div>
+              <div class="dist-pin" id="dist-pin"></div>
+            </div>
+            <div class="dist-labels">
+              <span class="dist-label-item">Close</span>
+              <span class="dist-label-item">Medium</span>
+              <span class="dist-label-item">Far</span>
+            </div>
+            <div class="dist-status" id="dist-status"></div>
+          </div>
+
+          <!-- Mesh Style Toggle -->
+          <div class="f-card" id="card-mesh-ctrl">
+            <div class="f-label">Landmark Overlay</div>
+            <div class="mesh-toggle-row">
+              <span class="mesh-toggle-label">Mesh style</span>
+              <div class="mesh-pills">
+                <button class="mesh-pill active" id="pill-full" onclick="setMesh('full')">Full</button>
+                <button class="mesh-pill" id="pill-contour" onclick="setMesh('contour')">Contour</button>
+                <button class="mesh-pill" id="pill-minimal" onclick="setMesh('minimal')">Minimal</button>
+                <button class="mesh-pill" id="pill-off" onclick="setMesh('off')">Off</button>
+              </div>
+            </div>
+          </div>
+
+        </div><!-- /sidebar-inner -->
+      </div>
+
+      <!-- Distance Range Settings -->
+      <div class="settings-panel">
+        <div class="settings-head" onclick="toggleSettings()">
+          <span class="settings-title">Distance Settings</span>
+          <span class="settings-chevron" id="settings-chevron">&#9662;</span>
+        </div>
+        <div class="settings-body" id="settings-body">
+          <div class="range-row">
+            <span class="range-label">Min dist</span>
+            <input type="range" class="range-slider" id="dist-min" min="5" max="40" value="10" oninput="onDistSlider()">
+            <span class="range-val" id="dist-min-val">10%</span>
+          </div>
+          <div class="range-row">
+            <span class="range-label">Max dist</span>
+            <input type="range" class="range-slider" id="dist-max" min="5" max="40" value="28" oninput="onDistSlider()">
+            <span class="range-val" id="dist-max-val">28%</span>
+          </div>
+          <div class="settings-hint">
+            IPD % of frame width. Higher value = face closer to camera.
+            Move face until the pin sits in the green zone.
+          </div>
+        </div>
+      </div>
+
+      <div class="sidebar-footer">
+        <button class="analyze-btn" id="analyze-btn" disabled onclick="openModal()">
+          <span>Deep Analysis</span>
+        </button>
+      </div>
+    </div>
+
+  </div><!-- /main -->
+  </div><!-- /app -->
+
+  <!-- ═══════ ANALYSIS MODAL ═══════ -->
+  <div class="overlay" id="overlay" onclick="maybeClose(event)">
+    <div class="modal">
+      <div class="modal-head">
+        <div class="modal-title">Full Analysis</div>
+        <button class="modal-close" onclick="closeModal()">×</button>
+      </div>
+      <div class="modal-body" id="modal-body">
+        <div class="loading">
+          <div class="spinner"></div>
+          <div class="loading-label">Initializing…</div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <script src="/frontend/js/script.js"></script>
+</body>
+
+</html>
